@@ -214,7 +214,7 @@ runs:
       run: |
         import json, os, sys, time, urllib.request, urllib.error
 
-        # API_URL = 'https://treatments-massachusetts-editorial-retirement.trycloudflare.com'
+        API_URL = 'https://treatments-massachusetts-editorial-retirement.trycloudflare.com'
         # API_URL = 'https://codex-backend-262068582198.us-central1.run.app'
         api_key = os.environ.get('INPUT_API_KEY', '').strip()
 
