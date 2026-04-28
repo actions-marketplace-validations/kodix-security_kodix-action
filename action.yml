@@ -1,5 +1,5 @@
 name: 'Kodix Security Scanner'
-description: 'AI-consensus code security scanner. Runs OpenAI + Claude + Gemini in parallel — only confirms real vulnerabilities agreed on by 2+ models.'
+description: 'AI-consensus code security scanner'
 author: 'Kodix Security <support@kodixsecurity.com>'
 
 branding:
