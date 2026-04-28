@@ -1,0 +1,492 @@
+name: 'Kodix Security Scanner'
+description: 'AI-consensus code security scanner. Runs OpenAI + Claude + Gemini in parallel — only confirms real vulnerabilities agreed on by 2+ models.'
+author: 'Kodix Security <support@kodixsecurity.com>'
+
+branding:
+  icon: 'shield'
+  color: 'orange'
+
+inputs:
+  api_key:
+    description: 'Your Kodix API key (generate at kodixsecurity.com/profile)'
+    required: true
+  mode:
+    description: 'Scan mode: "full" scans every source file, "diff" scans only files changed in this push/PR'
+    required: false
+    default: 'full'
+
+outputs:
+  scan_id:
+    description: 'The Kodix scan ID for this run'
+    value: ${{ steps.kodix-run.outputs.scan_id }}
+  findings_count:
+    description: 'Total number of consensus vulnerabilities found'
+    value: ${{ steps.kodix-run.outputs.findings_count }}
+  critical_count:
+    description: 'Number of CRITICAL severity findings'
+    value: ${{ steps.kodix-run.outputs.critical_count }}
+  high_count:
+    description: 'Number of HIGH severity findings'
+    value: ${{ steps.kodix-run.outputs.high_count }}
+  medium_count:
+    description: 'Number of MEDIUM severity findings'
+    value: ${{ steps.kodix-run.outputs.medium_count }}
+  low_count:
+    description: 'Number of LOW severity findings'
+    value: ${{ steps.kodix-run.outputs.low_count }}
+  consensus_score:
+    description: 'Security score from 0 (worst) to 100 (best)'
+    value: ${{ steps.kodix-run.outputs.consensus_score }}
+  pdf_url:
+    description: 'URL to download the full PDF security report'
+    value: ${{ steps.kodix-run.outputs.pdf_url }}
+
+runs:
+  using: 'composite'
+  steps:
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 1 — Discover and collect every readable source file
+    # ─────────────────────────────────────────────────────────────────────────
+    - name: 🛡️ Kodix — Collect files
+      id: kodix-collect
+      shell: python3 {0}
+      run: |
+        import os, json, sys, time
+
+        mode       = os.environ.get('INPUT_MODE', 'full').lower()
+        event_name = os.environ.get('GITHUB_EVENT_NAME', '')
+        repo_name  = os.environ.get('GITHUB_REPOSITORY', 'unknown')
+        branch     = os.environ.get('GITHUB_REF_NAME', 'unknown')
+        commit_sha = os.environ.get('GITHUB_SHA', '')
+        actor      = os.environ.get('GITHUB_ACTOR', '')
+        workspace  = os.environ.get('GITHUB_WORKSPACE', '.')
+        event_path = os.environ.get('GITHUB_EVENT_PATH', '')
+
+        # Directories that are never source code
+        SKIP_DIRS = {
+          'node_modules', '.git', '.svn', '.hg',
+          'dist', 'build', 'out', '.next', '.nuxt',
+          '__pycache__', 'vendor', 'coverage', '.nyc_output',
+          '.cache', 'target', '.gradle', '.idea', '.vscode',
+          'venv', '.venv', 'env', 'bower_components', '.terraform',
+          '.yarn', '.pnpm-store', 'Pods',
+        }
+
+        print(f'\n{"═"*68}')
+        print(f'  🛡️  KODIX AI SECURITY SCANNER')
+        print(f'{"═"*68}')
+        print(f'  Repository  : {repo_name}')
+        print(f'  Branch      : {branch}')
+        print(f'  Commit      : {commit_sha[:8] if commit_sha else "unknown"}')
+        print(f'  Triggered by: {actor}')
+        print(f'  Scan mode   : {mode.upper()}')
+        print(f'  Started at  : {time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}')
+        print(f'{"═"*68}\n')
+
+        def is_readable_text(path):
+            """Return True if the file can be read as UTF-8 text (not a binary)."""
+            try:
+                with open(path, 'rb') as fh:
+                    chunk = fh.read(8192)
+                if b'\x00' in chunk:
+                    return False
+                chunk.decode('utf-8', errors='strict')
+                return True
+            except Exception:
+                return False
+
+        files = []
+        skipped_binary  = 0
+        skipped_empty   = 0
+
+        print(f'  ┌{"─"*64}')
+        print(f'  │  COLLECTING FILES — {mode.upper()} MODE')
+        print(f'  ├{"─"*64}')
+
+        if mode == 'diff' and event_path and os.path.exists(event_path):
+            try:
+                with open(event_path) as fh:
+                    event = json.load(fh)
+                changed = set()
+                for commit in event.get('commits', []):
+                    changed.update(commit.get('added', []))
+                    changed.update(commit.get('modified', []))
+                print(f'  │  Changed files in this push: {len(changed)}')
+                print(f'  ├{"─"*64}')
+
+                for fpath in sorted(changed):
+                    abs_path = os.path.join(workspace, fpath)
+                    if not os.path.isfile(abs_path):
+                        continue
+                    if any(d in fpath.replace('\\', '/').split('/') for d in SKIP_DIRS):
+                        continue
+                    if not is_readable_text(abs_path):
+                        skipped_binary += 1
+                        continue
+                    try:
+                        with open(abs_path, 'r', errors='replace') as fh:
+                            content = fh.read()
+                        if not content.strip():
+                            skipped_empty += 1
+                            continue
+                        size_kb = len(content.encode('utf-8', errors='replace')) / 1024
+                        files.append({'name': fpath, 'content': content})
+                        print(f'  │  + {fpath:<58} {size_kb:>6.1f} KB')
+                    except Exception as e:
+                        print(f'  │  ⚠ skip {fpath}: {e}')
+            except Exception as e:
+                print(f'  │  ⚠ Could not parse event payload: {e}')
+                print(f'  │  Falling back to FULL scan mode')
+                mode = 'full'
+
+        if mode == 'full' or not files:
+            if mode != 'full':
+                print(f'  │  No diff files — switching to FULL mode')
+            print(f'  │  Traversing: {workspace}')
+            print(f'  ├{"─"*64}')
+
+            for root, dirs, fnames in os.walk(workspace):
+                # Prune unwanted directories so os.walk never descends into them
+                dirs[:] = sorted([d for d in dirs if d not in SKIP_DIRS])
+
+                rel_root = os.path.relpath(root, workspace).replace('\\', '/')
+                parts = rel_root.split('/')
+                if any(p in SKIP_DIRS for p in parts):
+                    continue
+
+                for fname in sorted(fnames):
+                    abs_path = os.path.join(root, fname)
+                    rel_path = os.path.relpath(abs_path, workspace).replace('\\', '/')
+
+                    if not is_readable_text(abs_path):
+                        skipped_binary += 1
+                        continue
+
+                    try:
+                        with open(abs_path, 'r', errors='replace') as fh:
+                            content = fh.read()
+                        if not content.strip():
+                            skipped_empty += 1
+                            continue
+                        size_kb = len(content.encode('utf-8', errors='replace')) / 1024
+                        files.append({'name': rel_path, 'content': content})
+                        print(f'  │  + {rel_path:<58} {size_kb:>6.1f} KB')
+                    except Exception as e:
+                        print(f'  │  ⚠ skip {rel_path}: {e}')
+
+        total_kb = sum(len(f['content'].encode('utf-8', errors='replace')) / 1024 for f in files)
+
+        print(f'  ├{"─"*64}')
+        print(f'  │  Files collected : {len(files)}')
+        print(f'  │  Total size      : {total_kb:.1f} KB')
+        if skipped_binary: print(f'  │  Skipped binary  : {skipped_binary}')
+        if skipped_empty:  print(f'  │  Skipped empty   : {skipped_empty}')
+        print(f'  └{"─"*64}\n')
+
+        if not files:
+            print('  ⚠ No readable source files found. Nothing to scan.')
+            sys.exit(0)
+
+        payload = {
+            'repo_name':           repo_name,
+            'branch':              branch,
+            'commit_sha':          commit_sha,
+            'commit_author_email': actor,
+            'scan_mode':           mode.upper(),
+            'files':               files,
+        }
+
+        with open('/tmp/kodix_payload.json', 'w') as fh:
+            json.dump(payload, fh)
+
+        print(f'  ✓ Payload ready — {len(files)} file(s) queued for AI scanning\n')
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 2 — Submit to Kodix, poll for results, render full terminal report
+    # ─────────────────────────────────────────────────────────────────────────
+    - name: 🚀 Kodix — Run scan
+      id: kodix-run
+      shell: python3 {0}
+      run: |
+        import json, os, sys, time, urllib.request, urllib.error
+
+        # API_URL = 'https://treatments-massachusetts-editorial-retirement.trycloudflare.com'
+        # API_URL = 'https://codex-backend-262068582198.us-central1.run.app'
+        api_key = os.environ.get('INPUT_API_KEY', '').strip()
+
+        SEVERITY_ICONS = {'critical': '🔴', 'high': '🟠', 'medium': '🟡', 'low': '🔵'}
+        SEVERITY_ORDER = ['critical', 'high', 'medium', 'low']
+
+        # ── Validate key presence ────────────────────────────────────────
+        if not api_key:
+            print('\n  ✗ ERROR: api_key is not set.')
+            print('  Pass it via:  with: api_key: ${{ secrets.KODIX_API_KEY }}')
+            sys.exit(1)
+
+        # ── Load payload ─────────────────────────────────────────────────
+        with open('/tmp/kodix_payload.json') as fh:
+            payload = json.load(fh)
+
+        file_count = len(payload.get('files', []))
+        if file_count == 0:
+            print('  ⚠ Empty payload — nothing to scan.')
+            gho = os.environ.get('GITHUB_OUTPUT', '')
+            if gho:
+                with open(gho, 'a') as fh:
+                    fh.write('scan_id=skipped\nfindings_count=0\n')
+            sys.exit(0)
+
+        # ── Trigger scan ─────────────────────────────────────────────────
+        print(f'  ┌{"─"*64}')
+        print(f'  │  SUBMITTING TO KODIX API')
+        print(f'  ├{"─"*64}')
+        print(f'  │  Files   : {file_count}')
+        total_kb = sum(len(f["content"].encode("utf-8", errors="replace")) / 1024 for f in payload["files"])
+        print(f'  │  Size    : {total_kb:.1f} KB')
+        print(f'  │  Sending payload…')
+
+        req = urllib.request.Request(
+            f'{API_URL}/api/scan/trigger',
+            data=json.dumps(payload).encode(),
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type':  'application/json',
+                'User-Agent':    'kodix-github-action/1.0',
+            },
+            method='POST',
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                trigger_data = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()
+            try:
+                err = json.loads(body)
+            except Exception:
+                err = {'error': body}
+
+            print(f'  └{"─"*64}')
+            if e.code == 401:
+                print('\n  ✗ AUTHENTICATION FAILED')
+                print('  Your API key is invalid or has been revoked.')
+                print('  Manage your keys at: kodixsecurity.com/profile → API Keys')
+                sys.exit(1)
+            elif e.code == 402:
+                print('\n  ✗ INSUFFICIENT TOKEN BALANCE')
+                print(f'  Balance  : {err.get("balance", "?")} tokens')
+                print(f'  Required : {err.get("required", "?")} tokens')
+                print(f'  Shortage : {err.get("shortage", "?")} tokens')
+                print(f'  Purchase : kodixsecurity.com/tokens')
+                sys.exit(1)
+            elif e.code == 429:
+                print('\n  ✗ RATE LIMIT — too many requests.')
+                print('  Wait a few minutes and retry the workflow.')
+                sys.exit(1)
+            else:
+                print(f'\n  ✗ API ERROR {e.code}: {err.get("error", body)}')
+                sys.exit(1)
+        except urllib.error.URLError as e:
+            print(f'  └{"─"*64}')
+            print(f'\n  ✗ NETWORK ERROR: Cannot reach Kodix API.')
+            print(f'  Reason: {e.reason}')
+            sys.exit(1)
+
+        scan_id        = trigger_data['scan_id']
+        tokens_charged = trigger_data.get('tokens_charged', '?')
+
+        print(f'  │')
+        print(f'  │  ✓ Scan accepted by API')
+        print(f'  │  Scan ID        : {scan_id}')
+        print(f'  │  Tokens charged : {tokens_charged}')
+        print(f'  └{"─"*64}\n')
+
+        # ── Poll until completed ─────────────────────────────────────────
+        status_url = f'{API_URL}/api/scan/{scan_id}/status'
+
+        print(f'  ┌{"─"*64}')
+        print(f'  │  SCAN IN PROGRESS')
+        print(f'  ├{"─"*64}')
+        print(f'  │  3 AI models are scanning your code in parallel.')
+        print(f'  │  Only findings confirmed by 2+ models will be reported.')
+        print(f'  ├{"─"*64}')
+
+        scan_data         = None
+        last_status       = ''
+        last_prog_display = ''
+        poll_n            = 0
+        start_time        = time.time()
+
+        while True:
+            poll_n += 1
+            elapsed = int(time.time() - start_time)
+
+            req2 = urllib.request.Request(
+                status_url,
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'User-Agent':    'kodix-github-action/1.0',
+                },
+            )
+            try:
+                with urllib.request.urlopen(req2, timeout=30) as resp2:
+                    poll = json.loads(resp2.read().decode())
+            except urllib.error.HTTPError as e:
+                if e.code == 401:
+                    print(f'  │  ✗ API key rejected during polling — key was revoked.')
+                    print(f'  └{"─"*64}')
+                    sys.exit(1)
+                print(f'  │  ⚠ Poll {poll_n}: HTTP {e.code} — retrying in 10s… ({elapsed}s)')
+                time.sleep(10)
+                continue
+            except Exception as e:
+                print(f'  │  ⚠ Poll {poll_n}: {type(e).__name__} — retrying in 10s… ({elapsed}s)')
+                time.sleep(10)
+                continue
+
+            scan_data = poll.get('scan', {})
+            status    = scan_data.get('status', 'unknown')
+            progress  = scan_data.get('progress', {})
+            ts        = time.strftime('%H:%M:%S', time.gmtime())
+
+            # Show status transitions immediately
+            if status != last_status:
+                arrow = f'{last_status} → {status}' if last_status else status
+                print(f'  │  [{ts}] {arrow}', flush=True)
+                last_status = status
+
+            # Show model progress bars when available
+            if progress:
+                parts = []
+                for model_name in sorted(progress.keys()):
+                    v   = progress[model_name]
+                    pct = v.get('pct', 0) if isinstance(v, dict) else int(v)
+                    filled  = int(pct / 5)
+                    empty   = 20 - filled
+                    bar     = '█' * filled + '░' * empty
+                    parts.append(f'{model_name}: [{bar}] {pct:3d}%')
+                prog_line = '  │  ' + '   '.join(parts) + f'   {elapsed}s'
+                if prog_line != last_prog_display:
+                    print(prog_line, flush=True)
+                    last_prog_display = prog_line
+            else:
+                spinners = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
+                print(f'  │  {spinners[poll_n % 10]} Processing… ({elapsed}s elapsed)', flush=True)
+
+            if status == 'completed':
+                duration = int(time.time() - start_time)
+                print(f'  ├{"─"*64}')
+                print(f'  │  ✓ All models finished in {duration}s')
+                print(f'  └{"─"*64}\n')
+                break
+
+            if status == 'failed':
+                err_msg = scan_data.get('error', 'Unknown error')
+                print(f'  ├{"─"*64}')
+                print(f'  │  ✗ SCAN FAILED: {err_msg}')
+                print(f'  └{"─"*64}')
+                sys.exit(1)
+
+            time.sleep(8)
+
+        # ── Render results ────────────────────────────────────────────────
+        findings      = scan_data.get('findings', [])
+        score         = scan_data.get('consensus_score', 0)
+        sev_breakdown = scan_data.get('severity_breakdown', {})
+        pdf_url       = scan_data.get('pdf_url', '')
+
+        n_critical = sev_breakdown.get('critical', 0)
+        n_high     = sev_breakdown.get('high', 0)
+        n_medium   = sev_breakdown.get('medium', 0)
+        n_low      = sev_breakdown.get('low', 0)
+        n_total    = len(findings)
+
+        grade      = 'A+' if score >= 95 else 'A' if score >= 90 else 'B' if score >= 75 else 'C' if score >= 60 else 'D' if score >= 40 else 'F'
+        score_icon = '🟢' if score >= 75 else '🟡' if score >= 50 else '🔴'
+
+        print(f'{"═"*68}')
+        print(f'  🛡️  KODIX SECURITY SCAN — RESULTS')
+        print(f'{"═"*68}')
+        print(f'  Scan ID   : {scan_id}')
+        print(f'  Score     : {score_icon} {score}/100  (Grade: {grade})')
+        print(f'  Findings  : {n_total} confirmed vulnerability(ies)')
+        print(f'{"─"*68}')
+        print(f'  {"Severity":<12}  {"Count":>5}  {"Visual bar"}')
+        print(f'  {"─"*12}  {"─"*5}  {"─"*40}')
+
+        for sev in SEVERITY_ORDER:
+            count = sev_breakdown.get(sev, 0)
+            bar   = '█' * min(count, 40) if count > 0 else '—'
+            icon  = SEVERITY_ICONS.get(sev, '⚪')
+            print(f'  {icon} {sev.upper():<10}  {count:>5}  {bar}')
+
+        print(f'{"═"*68}')
+
+        if findings:
+            print(f'\n  VULNERABILITY DETAILS  ({n_total} finding(s))')
+            print(f'{"─"*68}')
+
+            for i, finding in enumerate(findings, 1):
+                sev       = (finding.get('severity') or 'low').lower()
+                icon      = SEVERITY_ICONS.get(sev, '⚪')
+                sev_upper = sev.upper()
+                fname     = (finding.get('file_name') or finding.get('fileName') or 'unknown file')
+                if len(fname) > 52: fname = '…' + fname[-50:]
+                line      = finding.get('line_number') or finding.get('lineNumber') or '?'
+                title     = (finding.get('title') or 'Untitled finding')
+                confirmed = finding.get('confirmed_by') or finding.get('confirmedBy') or []
+                models_str = ', '.join(confirmed) if confirmed else 'unknown'
+                description = (finding.get('description') or '').strip()
+
+                print(f'\n  ┌─ [{i}/{n_total}] {icon} {sev_upper}')
+                print(f'  │  File    : {fname}')
+                print(f'  │  Line    : {line}')
+                print(f'  │  Title   : {title}')
+                if description:
+                    # Wrap long descriptions at 60 chars
+                    words = description.split()
+                    line_buf, lines_out = [], []
+                    for w in words:
+                        if sum(len(x)+1 for x in line_buf) + len(w) > 60:
+                            lines_out.append(' '.join(line_buf))
+                            line_buf = [w]
+                        else:
+                            line_buf.append(w)
+                    if line_buf: lines_out.append(' '.join(line_buf))
+                    print(f'  │  Details : {lines_out[0]}')
+                    for extra_line in lines_out[1:]:
+                        print(f'  │            {extra_line}')
+                print(f'  │  Models  : {models_str}')
+
+                ctx = (finding.get('code_context') or finding.get('codeContext') or '').strip()
+                if ctx:
+                    print(f'  │')
+                    for code_line in ctx.split('\n')[:6]:
+                        print(f'  │    {code_line[:64]}')
+
+                print(f'  └{"─"*64}')
+
+        print(f'\n{"─"*68}')
+        if pdf_url:
+            print(f'  📄 Full PDF report  : {pdf_url}')
+        print(f'  🌐 Dashboard        : https://kodixsecurity.com/scan/{scan_id}')
+        print(f'{"═"*68}')
+        print(f'  ✓ Kodix scan complete!\n')
+
+        # ── Write GitHub outputs ──────────────────────────────────────────
+        gho = os.environ.get('GITHUB_OUTPUT', '')
+        if gho:
+            with open(gho, 'a') as fh:
+                fh.write(f'scan_id={scan_id}\n')
+                fh.write(f'findings_count={n_total}\n')
+                fh.write(f'critical_count={n_critical}\n')
+                fh.write(f'high_count={n_high}\n')
+                fh.write(f'medium_count={n_medium}\n')
+                fh.write(f'low_count={n_low}\n')
+                fh.write(f'consensus_score={score}\n')
+                fh.write(f'pdf_url={pdf_url}\n')
+      env:
+        INPUT_API_KEY: ${{ inputs.api_key }}

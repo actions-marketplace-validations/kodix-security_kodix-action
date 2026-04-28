@@ -1,0 +1,27 @@
+name: Kodix Security Scan (Changed Files Only)
+
+# This workflow only scans files that changed in the current push/PR
+# Faster and cheaper — great for active development branches
+
+on:
+  push:
+    branches-ignore: [main]  # Only on feature branches
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  security-scan:
+    name: 🛡️ Kodix Diff Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # needed to detect changed files
+
+      - name: Run Kodix Diff Scan
+        uses: kodix-security/kodix-action@v1
+        with:
+          api_key: ${{ secrets.KODIX_API_KEY }}
+          mode: diff           # only scan changed files

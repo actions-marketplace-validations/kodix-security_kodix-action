@@ -1,0 +1,87 @@
+name: Kodix Security Scan (Advanced)
+
+on:
+  push:
+    branches: [main, develop, staging]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Full scan every Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+
+jobs:
+  security-scan:
+    name: 🛡️ Kodix AI Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed for diff mode to see changed files
+
+      - name: Run Kodix Security Scan
+        id: kodix
+        uses: kodix-security/kodix-action@v1
+        with:
+          api_key: ${{ secrets.KODIX_API_KEY }}
+          mode: full       # or "diff" to scan only changed files
+
+      # Post a summary to the GitHub Actions job page
+      - name: Security Summary
+        if: always()
+        run: |
+          echo "## 🛡️ Kodix Security Results" >> $GITHUB_STEP_SUMMARY
+          echo ""                              >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |"           >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|"           >> $GITHUB_STEP_SUMMARY
+          echo "| Security Score | ${{ steps.kodix.outputs.consensus_score }}/100 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Findings | ${{ steps.kodix.outputs.findings_count }} |"      >> $GITHUB_STEP_SUMMARY
+          echo "| 🔴 Critical | ${{ steps.kodix.outputs.critical_count }} |"         >> $GITHUB_STEP_SUMMARY
+          echo "| 🟠 High | ${{ steps.kodix.outputs.high_count }} |"                 >> $GITHUB_STEP_SUMMARY
+          echo "| 🟡 Medium | ${{ steps.kodix.outputs.medium_count }} |"             >> $GITHUB_STEP_SUMMARY
+          echo "| 🔵 Low | ${{ steps.kodix.outputs.low_count }} |"                   >> $GITHUB_STEP_SUMMARY
+          echo ""                              >> $GITHUB_STEP_SUMMARY
+          echo "📄 [Full PDF Report](${{ steps.kodix.outputs.pdf_url }})" >> $GITHUB_STEP_SUMMARY
+          echo "🔍 [Dashboard](https://kodixsecurity.com/scan/${{ steps.kodix.outputs.scan_id }})" >> $GITHUB_STEP_SUMMARY
+
+      # Post a comment to the pull request with results
+      - name: PR Comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const score    = '${{ steps.kodix.outputs.consensus_score }}';
+            const total    = '${{ steps.kodix.outputs.findings_count }}';
+            const critical = '${{ steps.kodix.outputs.critical_count }}';
+            const high     = '${{ steps.kodix.outputs.high_count }}';
+            const medium   = '${{ steps.kodix.outputs.medium_count }}';
+            const low      = '${{ steps.kodix.outputs.low_count }}';
+            const pdfUrl   = '${{ steps.kodix.outputs.pdf_url }}';
+            const scanId   = '${{ steps.kodix.outputs.scan_id }}';
+
+            const icon = score >= 75 ? '🟢' : score >= 50 ? '🟡' : '🔴';
+            const body = `## 🛡️ Kodix Security Scan Results
+
+${icon} **Security Score: ${score}/100**
+
+| Severity | Count |
+|----------|-------|
+| 🔴 Critical | ${critical} |
+| 🟠 High | ${high} |
+| 🟡 Medium | ${medium} |
+| 🔵 Low | ${low} |
+
+**${total} confirmed finding(s)**
+
+${pdfUrl ? `📄 [Download PDF Report](${pdfUrl})` : ''}
+🔍 [View in Kodix Dashboard](https://kodixsecurity.com/scan/${scanId})
+
+> Powered by [Kodix Security](https://kodixsecurity.com) — AI-consensus vulnerability detection`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
