@@ -1,6 +1,7 @@
 name: 'Kodix Security Scanner'
 description: 'AI-consensus code security scanner'
 author: 'Kodix Security <support@kodixsecurity.com>'
+version: '1.0.1'  # ← Add this line
 
 branding:
   icon: 'shield'
@@ -223,7 +224,7 @@ runs:
         # ── Validate key presence ────────────────────────────────────────
         if not api_key:
             print('\n  ✗ ERROR: api_key is not set.')
-            print('  Pass it via:  with: api_key: ${{ secrets.KODIX_API_KEY }}')
+            print('  Pass it via:  with: api_key: ${{ inputs.api_key }}')
             sys.exit(1)
 
         # ── Load payload ─────────────────────────────────────────────────
