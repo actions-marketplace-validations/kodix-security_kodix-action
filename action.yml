@@ -1,7 +1,7 @@
 name: 'Kodix Security Scanner'
 description: 'AI-consensus code security scanner'
-author: 'Kodix Security <support@kodixsecurity.com>'
-version: '1.0.1'  # ← Add this line
+author: 'Kodix Security <gabi@kodixsecurity.com>'
+version: '1'  # ← Add this line
 
 branding:
   icon: 'shield'
@@ -47,9 +47,9 @@ runs:
   steps:
 
     # ─────────────────────────────────────────────────────────────────────────
-    # STEP 1 — Discover and collect every readable source file
+    # STEP 1 Discover and collect every readable source file
     # ─────────────────────────────────────────────────────────────────────────
-    - name: 🛡️ Kodix — Collect files
+    - name: 🛡️ Kodix Collect files
       id: kodix-collect
       shell: python3 {0}
       run: |
@@ -102,7 +102,7 @@ runs:
         skipped_empty   = 0
 
         print(f'  ┌{"─"*64}')
-        print(f'  │  COLLECTING FILES — {mode.upper()} MODE')
+        print(f'  │  COLLECTING FILES {mode.upper()} MODE')
         print(f'  ├{"─"*64}')
 
         if mode == 'diff' and event_path and os.path.exists(event_path):
@@ -143,7 +143,7 @@ runs:
 
         if mode == 'full' or not files:
             if mode != 'full':
-                print(f'  │  No diff files — switching to FULL mode')
+                print(f'  │  No diff files switching to FULL mode')
             print(f'  │  Traversing: {workspace}')
             print(f'  ├{"─"*64}')
 
@@ -201,21 +201,20 @@ runs:
         with open('/tmp/kodix_payload.json', 'w') as fh:
             json.dump(payload, fh)
 
-        print(f'  ✓ Payload ready — {len(files)} file(s) queued for AI scanning\n')
+        print(f'  ✓ Payload ready {len(files)} file(s) queued for AI scanning\n')
       env:
         INPUT_MODE: ${{ inputs.mode }}
 
     # ─────────────────────────────────────────────────────────────────────────
-    # STEP 2 — Submit to Kodix, poll for results, render full terminal report
+    # STEP 2 Submit to Kodix, poll for results, render full terminal report
     # ─────────────────────────────────────────────────────────────────────────
-    - name: 🚀 Kodix — Run scan
+    - name: 🚀 Kodix Run scan
       id: kodix-run
       shell: python3 {0}
       run: |
         import json, os, sys, time, urllib.request, urllib.error
 
-        API_URL = 'https://treatments-massachusetts-editorial-retirement.trycloudflare.com'
-        # API_URL = 'https://codex-backend-262068582198.us-central1.run.app'
+        API_URL = 'https://backend.kodixsecurity.com'
         api_key = os.environ.get('INPUT_API_KEY', '').strip()
 
         SEVERITY_ICONS = {'critical': '🔴', 'high': '🟠', 'medium': '🟡', 'low': '🔵'}
@@ -233,7 +232,7 @@ runs:
 
         file_count = len(payload.get('files', []))
         if file_count == 0:
-            print('  ⚠ Empty payload — nothing to scan.')
+            print('  ⚠ Empty payload nothing to scan.')
             gho = os.environ.get('GITHUB_OUTPUT', '')
             if gho:
                 with open(gho, 'a') as fh:
@@ -284,7 +283,7 @@ runs:
                 print(f'  Purchase : kodixsecurity.com/tokens')
                 sys.exit(1)
             elif e.code == 429:
-                print('\n  ✗ RATE LIMIT — too many requests.')
+                print('\n  ✗ RATE LIMIT too many requests.')
                 print('  Wait a few minutes and retry the workflow.')
                 sys.exit(1)
             else:
@@ -337,14 +336,14 @@ runs:
                     poll = json.loads(resp2.read().decode())
             except urllib.error.HTTPError as e:
                 if e.code == 401:
-                    print(f'  │  ✗ API key rejected during polling — key was revoked.')
+                    print(f'  │  ✗ API key rejected during polling key was revoked.')
                     print(f'  └{"─"*64}')
                     sys.exit(1)
-                print(f'  │  ⚠ Poll {poll_n}: HTTP {e.code} — retrying in 10s… ({elapsed}s)')
+                print(f'  │  ⚠ Poll {poll_n}: HTTP {e.code} retrying in 10s… ({elapsed}s)')
                 time.sleep(10)
                 continue
             except Exception as e:
-                print(f'  │  ⚠ Poll {poll_n}: {type(e).__name__} — retrying in 10s… ({elapsed}s)')
+                print(f'  │  ⚠ Poll {poll_n}: {type(e).__name__} retrying in 10s… ({elapsed}s)')
                 time.sleep(10)
                 continue
 
@@ -409,7 +408,7 @@ runs:
         score_icon = '🟢' if score >= 75 else '🟡' if score >= 50 else '🔴'
 
         print(f'{"═"*68}')
-        print(f'  🛡️  KODIX SECURITY SCAN — RESULTS')
+        print(f'  🛡️  KODIX SECURITY SCAN RESULTS')
         print(f'{"═"*68}')
         print(f'  Scan ID   : {scan_id}')
         print(f'  Score     : {score_icon} {score}/100  (Grade: {grade})')

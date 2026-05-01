@@ -1,13 +1,13 @@
 name: Kodix Security Scan (Changed Files Only)
 
 # This workflow only scans files that changed in the current push/PR
-# Faster and cheaper — great for active development branches
+# Faster and cheape great for active development branches
 
 on:
   push:
-    branches-ignore: [main]  # Only on feature branches
-  pull_request:
-    branches: [main, develop]
+    branches: [main]
+  # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   security-scan:

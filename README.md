@@ -1,8 +1,8 @@
-# 🛡️ Kodix Security Scanner — GitHub Action
+# 🛡️ Kodix Security Scanner GitHub Action
 
 > **AI-consensus code security scanner.**
 > Runs OpenAI, Anthropic Claude, and Google Gemini on your code simultaneously.
-> Only vulnerabilities confirmed by **2 or more models** are surfaced — ~95% fewer false positives.
+> Only vulnerabilities confirmed by **2 or more models** are surfaced ~95% fewer false positives.
 
 ---
 
@@ -15,8 +15,8 @@ name: Kodix Security Scan
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   security:
@@ -37,12 +37,12 @@ That's it. Add `KODIX_API_KEY` to **Settings → Secrets → Actions** and every
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `api_key` | **Yes** | — | Your Kodix API key. Always pass via `${{ secrets.KODIX_API_KEY }}` |
-| `mode` | No | `full` | `full` — scan every source file. `diff` — scan only files changed in this push/PR |
+| `mode` | No | `full` | `full` scan every source file. `diff` scan only files changed in this push/PR |
 
 No other configuration needed. The action:
-- Scans **all readable text files** — no extension filters, no file-size limits, no line-count caps
-- **Never fails** the build due to vulnerability severity — only fails on real errors (invalid key, insufficient tokens, network failure)
-- **Polls until completion** — no arbitrary timeout
+- Scans **all readable text files** no extension filters, no file-size limits, no line-count caps
+- **Never fails** the build due to vulnerability severity only fails on real errors (invalid key, insufficient tokens, network failure)
+- **Polls until completion** no arbitrary timeout
 
 ---
 
@@ -81,7 +81,7 @@ Use outputs in subsequent steps:
 
 The action streams a live, structured log in three phases:
 
-### Phase 1 — File Discovery
+### Phase 1 File Discovery
 ```
 ════════════════════════════════════════════════════════════════════
   🛡️  KODIX AI SECURITY SCANNER
@@ -95,7 +95,7 @@ The action streams a live, structured log in three phases:
 ════════════════════════════════════════════════════════════════════
 
   ┌────────────────────────────────────────────────────────────────
-  │  COLLECTING FILES — FULL MODE
+  │  COLLECTING FILES FULL MODE
   ├────────────────────────────────────────────────────────────────
   │  + src/auth.js                                           4.2 KB
   │  + src/api.js                                            2.8 KB
@@ -107,7 +107,7 @@ The action streams a live, structured log in three phases:
   └────────────────────────────────────────────────────────────────
 ```
 
-### Phase 2 — Submission & Live Progress
+### Phase 2 Submission & Live Progress
 ```
   ┌────────────────────────────────────────────────────────────────
   │  SCAN IN PROGRESS
@@ -124,10 +124,10 @@ The action streams a live, structured log in three phases:
   └────────────────────────────────────────────────────────────────
 ```
 
-### Phase 3 — Results
+### Phase 3 Results
 ```
 ════════════════════════════════════════════════════════════════════
-  🛡️  KODIX SECURITY SCAN — RESULTS
+  🛡️  KODIX SECURITY SCAN RESULTS
 ════════════════════════════════════════════════════════════════════
   Score     : 🟡 62/100  (Grade: C)
   Findings  : 4 confirmed vulnerability(ies)
@@ -179,10 +179,10 @@ The action exits with a **non-zero code** (failing the build) only for operation
 | Invalid or revoked API key (HTTP 401) | `1` |
 | Insufficient token balance (HTTP 402) | `1` |
 | Rate limit exceeded (HTTP 429) | `1` |
-| Network error — cannot reach Kodix API | `1` |
+| Network error cannot reach Kodix API | `1` |
 | Scan marked `failed` by the API | `1` |
 
-Vulnerability findings — regardless of severity — **never** cause the action to fail.
+Vulnerability findings regardless of severity **never** cause the action to fail.
 
 ---
 
@@ -199,8 +199,7 @@ Vulnerability findings — regardless of severity — **never** cause the action
 
 | File | Description |
 |------|-------------|
-| [`examples/basic.yml`](examples/basic.yml) | Minimal — push to main |
-| [`examples/advanced.yml`](examples/advanced.yml) | PR comments + GitHub Step Summary + scheduled scans |
+| [`examples/basic.yml`](examples/basic.yml) | Minimal push to main |
 | [`examples/diff-only.yml`](examples/diff-only.yml) | Diff mode for feature branches |
 
 ---
@@ -227,7 +226,7 @@ Outputs written (scan_id, score, counts, pdf_url)
 
 ## Security
 
-- Your API key is passed via GitHub Secrets — never hardcoded
+- Your API key is passed via GitHub Secrets never hardcoded
 - Source files are held in memory only during the scan and immediately discarded
 - Only vulnerability metadata is persisted to your Kodix scan history
 - Revoke any compromised key instantly at kodixsecurity.com/profile
@@ -237,4 +236,4 @@ Outputs written (scan_id, score, counts, pdf_url)
 ## Support
 
 - Docs: [kodixsecurity.com/docs](https://kodixsecurity.com/docs)
-- Email: support@kodixsecurity.com
+- Email: gabi@kodixsecurity.com
