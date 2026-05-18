@@ -74,6 +74,90 @@ runs:
           '.yarn', '.pnpm-store', 'Pods',
         }
 
+        # Whitelist of code file extensions — only actual programming languages.
+        # Non-code files (markdown, SQL, YAML, JSON, config, lock files, etc.)
+        # waste tokens and do not benefit from security scanning.
+        CODE_EXTENSIONS = {
+          # Web / JavaScript ecosystem
+          '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+          '.vue', '.svelte', '.astro',
+          # Python
+          '.py', '.pyw', '.pyi',
+          # Go
+          '.go',
+          # Rust
+          '.rs',
+          # Java / JVM
+          '.java', '.kt', '.kts', '.groovy', '.scala', '.clj', '.cljs',
+          # C / C++ / Objective-C
+          '.c', '.cpp', '.cc', '.cxx', '.c++', '.h', '.hpp', '.hxx',
+          '.m', '.mm',
+          # C#
+          '.cs', '.csx',
+          # Ruby
+          '.rb', '.rake', '.gemspec',
+          # PHP
+          '.php', '.phtml', '.php3', '.php4', '.php5', '.php7', '.php8',
+          # Swift
+          '.swift',
+          # Kotlin
+          # (already covered above)
+          # Dart / Flutter
+          '.dart',
+          # Shell scripts
+          '.sh', '.bash', '.zsh', '.fish', '.ksh',
+          # Solidity / blockchain
+          '.sol', '.vy',
+          # Elixir / Erlang
+          '.ex', '.exs', '.erl', '.hrl',
+          # Haskell
+          '.hs', '.lhs',
+          # Lua
+          '.lua',
+          # Perl
+          '.pl', '.pm', '.t',
+          # R
+          '.r', '.R',
+          # Scala
+          # (already above)
+          # F# / .NET
+          '.fs', '.fsx', '.fsi',
+          # Clojure
+          # (already above)
+          # CoffeeScript
+          '.coffee',
+          # Elm
+          '.elm',
+          # OCaml
+          '.ml', '.mli',
+          # Assembly
+          '.asm', '.s',
+          # COBOL
+          '.cob', '.cbl',
+          # Fortran
+          '.f', '.f90', '.f95', '.f03',
+          # Nim
+          '.nim',
+          # Zig
+          '.zig',
+          # D
+          '.d',
+          # Crystal
+          '.cr',
+          # V
+          '.v',
+          # PowerShell
+          '.ps1', '.psm1', '.psd1',
+          # Batch
+          '.bat', '.cmd',
+          # Terraform (HCL) — has code logic worth scanning
+          '.tf', '.hcl',
+          # Makefile
+          '.mk',
+          # Dockerfile
+          '.dockerfile',
+        }
+
         print(f'\n{"═"*68}')
         print(f'  🛡️  KODIX AI SECURITY SCANNER')
         print(f'{"═"*68}')
@@ -84,6 +168,15 @@ runs:
         print(f'  Scan mode   : {mode.upper()}')
         print(f'  Started at  : {time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}')
         print(f'{"═"*68}\n')
+
+        def is_code_file(path):
+            """Return True only for known programming-language file extensions."""
+            _, ext = os.path.splitext(path)
+            # Special case: Dockerfile and Makefile have no extension
+            basename = os.path.basename(path).lower()
+            if basename in ('dockerfile', 'makefile', 'gemfile', 'rakefile', 'procfile', 'brewfile'):
+                return True
+            return ext.lower() in CODE_EXTENSIONS
 
         def is_readable_text(path):
             """Return True if the file can be read as UTF-8 text (not a binary)."""
@@ -98,8 +191,9 @@ runs:
                 return False
 
         files = []
-        skipped_binary  = 0
-        skipped_empty   = 0
+        skipped_binary   = 0
+        skipped_empty    = 0
+        skipped_non_code = 0
 
         print(f'  ┌{"─"*64}')
         print(f'  │  COLLECTING FILES {mode.upper()} MODE')
@@ -121,6 +215,9 @@ runs:
                     if not os.path.isfile(abs_path):
                         continue
                     if any(d in fpath.replace('\\', '/').split('/') for d in SKIP_DIRS):
+                        continue
+                    if not is_code_file(fpath):
+                        skipped_non_code += 1
                         continue
                     if not is_readable_text(abs_path):
                         skipped_binary += 1
@@ -160,6 +257,10 @@ runs:
                     abs_path = os.path.join(root, fname)
                     rel_path = os.path.relpath(abs_path, workspace).replace('\\', '/')
 
+                    if not is_code_file(rel_path):
+                        skipped_non_code += 1
+                        continue
+
                     if not is_readable_text(abs_path):
                         skipped_binary += 1
                         continue
@@ -181,8 +282,9 @@ runs:
         print(f'  ├{"─"*64}')
         print(f'  │  Files collected : {len(files)}')
         print(f'  │  Total size      : {total_kb:.1f} KB')
-        if skipped_binary: print(f'  │  Skipped binary  : {skipped_binary}')
-        if skipped_empty:  print(f'  │  Skipped empty   : {skipped_empty}')
+        if skipped_non_code: print(f'  │  Skipped non-code: {skipped_non_code} (docs/config/lock files)')
+        if skipped_binary:   print(f'  │  Skipped binary  : {skipped_binary}')
+        if skipped_empty:    print(f'  │  Skipped empty   : {skipped_empty}')
         print(f'  └{"─"*64}\n')
 
         if not files:
@@ -307,18 +409,53 @@ runs:
         # ── Poll until completed ─────────────────────────────────────────
         status_url = f'{API_URL}/api/scan/{scan_id}/status'
 
+        # Estimate time using content size when available (calibrated against real data).
+        # Formula: 8s per-file overhead + 0.4s per KB of source content.
+        # Falls back to 15s per file when size is unknown.
+        if total_kb > 0 and file_count > 0:
+            est_seconds = max(60, int(file_count * 8 + total_kb * 0.4))
+        else:
+            est_seconds = max(60, file_count * 15)
+
+        if est_seconds < 120:
+            est_label = f'~{est_seconds}s'
+        elif est_seconds < 3600:
+            est_label = f'~{est_seconds // 60} min'
+        else:
+            hrs = est_seconds // 3600
+            mins = (est_seconds % 3600) // 60
+            est_label = f'~{hrs}h {mins}m' if mins else f'~{hrs}h'
+
         print(f'  ┌{"─"*64}')
         print(f'  │  SCAN IN PROGRESS')
         print(f'  ├{"─"*64}')
         print(f'  │  3 AI models are scanning your code in parallel.')
         print(f'  │  Only findings confirmed by 2+ models will be reported.')
+        print(f'  │  Estimated time : {est_label} for {file_count} file(s).')
+        print(f'  │  The scan runs in the background — this workflow will wait.')
         print(f'  ├{"─"*64}')
 
-        scan_data         = None
-        last_status       = ''
-        last_prog_display = ''
-        poll_n            = 0
-        start_time        = time.time()
+        SPINNERS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+
+        def fmt_time(s):
+            s = max(0, int(s))
+            if s < 60:   return f'{s}s'
+            if s < 3600: return f'{s // 60}m {s % 60:02d}s'
+            return f'{s // 3600}h {(s % 3600) // 60:02d}m'
+
+        scan_data          = None
+        last_status        = ''
+        last_prog_display  = ''
+        poll_n             = 0
+        consecutive_errors = 0
+        MAX_CONSECUTIVE_ERRORS = 10
+        # Stale detection: exit if status + progress haven't changed for 30 minutes.
+        # This is smarter than a hard clock timeout — a slow but progressing scan
+        # will never be killed, while a truly stuck scan fails fast.
+        STALE_SECONDS      = 1800
+        start_time         = time.time()
+        last_change_time   = time.time()
+        last_change_sig    = ''
 
         while True:
             poll_n += 1
@@ -334,52 +471,100 @@ runs:
             try:
                 with urllib.request.urlopen(req2, timeout=30) as resp2:
                     poll = json.loads(resp2.read().decode())
+                consecutive_errors = 0
             except urllib.error.HTTPError as e:
+                consecutive_errors += 1
                 if e.code == 401:
-                    print(f'  │  ✗ API key rejected during polling key was revoked.')
+                    print(f'  │  ✗ API key rejected during polling — key was revoked.')
                     print(f'  └{"─"*64}')
                     sys.exit(1)
-                print(f'  │  ⚠ Poll {poll_n}: HTTP {e.code} retrying in 10s… ({elapsed}s)')
-                time.sleep(10)
+                if e.code == 429:
+                    print(f'  │  ⚠ Rate limited — backing off 60s… ({fmt_time(elapsed)} elapsed)', flush=True)
+                    time.sleep(60)
+                    continue
+                print(f'  │  ⚠ HTTP {e.code} (error {consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}) — retrying in 15s…', flush=True)
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    print(f'  └{"─"*64}')
+                    print(f'\n  ✗ FATAL: {consecutive_errors} consecutive poll failures. Aborting.')
+                    sys.exit(1)
+                time.sleep(15)
                 continue
             except Exception as e:
-                print(f'  │  ⚠ Poll {poll_n}: {type(e).__name__} retrying in 10s… ({elapsed}s)')
-                time.sleep(10)
+                consecutive_errors += 1
+                print(f'  │  ⚠ {type(e).__name__} (error {consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}) — retrying in 15s…', flush=True)
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    print(f'  └{"─"*64}')
+                    print(f'\n  ✗ FATAL: {consecutive_errors} consecutive poll failures. Aborting.')
+                    sys.exit(1)
+                time.sleep(15)
                 continue
 
             scan_data = poll.get('scan', {})
             status    = scan_data.get('status', 'unknown')
             progress  = scan_data.get('progress', {})
-            ts        = time.strftime('%H:%M:%S', time.gmtime())
 
-            # Show status transitions immediately
+            # ── Stale detection ──────────────────────────────────────────────
+            # Track a fingerprint of status+progress. If it hasn't changed for
+            # STALE_SECONDS the backend is likely stuck, not just slow.
+            change_sig = status + json.dumps(sorted(progress.items()) if progress else [], sort_keys=True)
+            if change_sig != last_change_sig:
+                last_change_sig  = change_sig
+                last_change_time = time.time()
+
+            stale_for = int(time.time() - last_change_time)
+            if stale_for > STALE_SECONDS:
+                print(f'  ├{"─"*64}')
+                print(f'  │  ✗ No progress for {stale_for // 60}m — scan appears stuck.')
+                print(f'  │    Check the Kodix dashboard for details.')
+                print(f'  └{"─"*64}')
+                sys.exit(1)
+
+            # ── Status transition banner ─────────────────────────────────────
             if status != last_status:
+                ts    = time.strftime('%H:%M:%S UTC', time.gmtime())
                 arrow = f'{last_status} → {status}' if last_status else status
-                print(f'  │  [{ts}] {arrow}', flush=True)
+                print(f'  ├{"─"*64}')
+                print(f'  │  [{ts}]  {arrow.upper()}', flush=True)
+                print(f'  ├{"─"*64}')
                 last_status = status
 
-            # Show model progress bars when available
+            # ── Live animated heartbeat (printed every poll) ─────────────────
+            spin      = SPINNERS[poll_n % len(SPINNERS)]
+            remaining = max(0, est_seconds - elapsed)
+
+            # Time-based progress bar: how far through the estimate are we
+            time_pct = min(99, int(elapsed / est_seconds * 100)) if est_seconds > 0 else 0
+            t_filled = int(time_pct / 2.5)   # 40-char wide bar
+            t_bar    = '█' * t_filled + '░' * (40 - t_filled)
+
+            print(f'  │', flush=True)
+            print(f'  │  {spin}  elapsed: {fmt_time(elapsed):<10}  remaining: ~{fmt_time(remaining)}', flush=True)
+            print(f'  │  ⏱  [{t_bar}] {time_pct:2d}%', flush=True)
+
+            # Stale warning (shown after 2 minutes of no change)
+            if stale_for > 120:
+                print(f'  │  ⚠  No change for {fmt_time(stale_for)} — still waiting…', flush=True)
+
+            # ── Per-model progress bars ──────────────────────────────────────
             if progress:
-                parts = []
                 for model_name in sorted(progress.keys()):
-                    v   = progress[model_name]
-                    pct = v.get('pct', 0) if isinstance(v, dict) else int(v)
-                    filled  = int(pct / 5)
-                    empty   = 20 - filled
-                    bar     = '█' * filled + '░' * empty
-                    parts.append(f'{model_name}: [{bar}] {pct:3d}%')
-                prog_line = '  │  ' + '   '.join(parts) + f'   {elapsed}s'
-                if prog_line != last_prog_display:
-                    print(prog_line, flush=True)
-                    last_prog_display = prog_line
+                    v    = progress[model_name]
+                    pct  = v.get('pct', 0) if isinstance(v, dict) else int(v)
+                    stat = v.get('status', 'scanning') if isinstance(v, dict) else 'scanning'
+                    done = stat in ('done', 'completed') or pct >= 100
+                    m_filled = int(pct / 5)
+                    m_bar    = '█' * m_filled + '░' * (20 - m_filled)
+                    m_icon   = '✓' if done else spin
+                    m_label  = 'done   ' if done else 'scanning'
+                    print(f'  │  {m_icon}  {model_name:<10}  [{m_bar}]  {pct:3d}%  {m_label}', flush=True)
             else:
-                spinners = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
-                print(f'  │  {spinners[poll_n % 10]} Processing… ({elapsed}s elapsed)', flush=True)
+                print(f'  │  {spin}  Initializing AI models…', flush=True)
 
             if status == 'completed':
                 duration = int(time.time() - start_time)
+                print(f'  │')
                 print(f'  ├{"─"*64}')
-                print(f'  │  ✓ All models finished in {duration}s')
+                print(f'  │  ✓ All models finished in {fmt_time(duration)}')
                 print(f'  └{"─"*64}\n')
                 break
 
@@ -390,7 +575,15 @@ runs:
                 print(f'  └{"─"*64}')
                 sys.exit(1)
 
-            time.sleep(8)
+            if status == 'cancelled':
+                print(f'  ├{"─"*64}')
+                print(f'  │  ✗ SCAN CANCELLED: this scan was cancelled via the dashboard.')
+                print(f'  └{"─"*64}')
+                sys.exit(1)
+
+            # Adaptive poll interval: frequent while fresh, slower for long scans
+            poll_interval = 10 if elapsed < 300 else 30
+            time.sleep(poll_interval)
 
         # ── Render results ────────────────────────────────────────────────
         findings      = scan_data.get('findings', [])
